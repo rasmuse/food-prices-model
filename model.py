@@ -39,12 +39,13 @@ def run(a, b, k_sp, k_sd, speculation_start, P_assets, k, start, end, magic_pric
         # Eqn. 28 in SI
         k_c = (a + b * it ** 2) * k_sd + b * (2 * it  + 1)
         
-        # This term is always included (SI Eqn. 29)
-        P[it+1] = k_c + (1 - k_sd) * P[it]
-
         # Add noise to equilibrium price
         noise = 2 * (np.random.rand() - .5) * noise_level
-        P[it+1] *= (1 + noise)
+        #P[it+1] *= (1 + noise)
+        k_c *= (1 + noise)
+
+        # This term is always included (SI Eqn. 29)
+        P[it+1] = k_c + (1 - k_sd) * P[it]
 
         # integer_speculation_start == 40
         # när i >= 41 så är P(i+1) == P(42) påverkad av spekulation
