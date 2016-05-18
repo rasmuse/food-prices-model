@@ -1,117 +1,112 @@
 import numpy as np
 import pandas as pd
-import matplotlib
-import matplotlib.pyplot
+import data
 
-# t0: what time to assign to first element in time series
-# t_spec: time where speculation terms are activated (relative to t0)
-# P_1:  time series of S&P500 index
-# P_2:  time series of bonds index inversed
-# a:    parameter for k_c(t)
-# b:    parameter for k_c(t)
-# k_1:  mu_equity * gamma_0 (-0.095 or -0.085)
-# k_2:  mu_bonds * gamma_0 (-67.9 or -48.2)
-# k_sd: (0.098 or 0.093)
-# k_sp: (1.29 or 1.27)
+def run_model(a, b, k_sp, k_sd, P_assets, k, speculation_start, t0=0,
+        magic_price=None, noise_level=0):
+    """
+    Run the model from the article (doi: 10.1073/pnas.1413108112).
 
-def run(a, b, k_sp, k_sd, speculation_start, P_assets, k, start, end, magic_price=None, noise_level=0):
+    Args:
+        a, b, k_sp, k_sd: Parameter values as defined in the paper.
+        P_assets: A pandas.DataFrame where each column is a Series of set of
+            prices of alternative assets (stocks and bonds in the paper).
+        k: A dict-like set of parameters for the speculation in alternative
+            assets. (Called k_equity and k_bonds in the paper.)
+            Keys should match the columns of P_assets.
+        speculation_start: The first time where speculators act. This
+            value must be an index in P_assets.
+        t0: What integer to assign to the first time step (as defined by the 
+            index of P_assets). This choice affects the equilibrium price
+            function (a + b**t).
+        magic_price: If not None, changes the logic for how prices are
+            determined close to speculation_start. See implementation below.
+        noise_level: Relative magnitude of white noise added to k_c
+            (essentially a way of adding noise to the equilibrium price).
+            For example, noise_level=0.01 multiplies the k_c(t) values by
+            numbers uniformly and IID in the range [0.99, 1.01].
 
-    # Calendar and integer times
-    ctimes = filter_dates(P_assets.index, start, end)
-    itimes = np.arange(len(ctimes))
+    Returns:
+        A pandas Series with the same time index as P_assets.
 
-    P_assets = P_assets.loc[ctimes]
-    P_assets.index = itimes
+    """
 
-    integer_speculation_start = ctimes.get_loc(speculation_start)    
+    # Reindex asset prices
+    calendar_times = P_assets.index
+    integer_times = np.arange(t0, len(calendar_times)+t0)
+    P_assets.index = integer_times
 
-    if magic_price is not None:
-        magic_time = integer_speculation_start + 1
+    integer_speculation_start = calendar_times.get_loc(speculation_start)
 
-    P = pd.Series(index=itimes)
+    noise = pd.Series(
+        data=(2 * (np.random.rand(len(integer_times)) - .5) * noise_level),
+        index=integer_times)
+
+    P = pd.Series(index=integer_times)
 
     # Equilibrium prices for the first time steps
-    for it in itimes[:2]:
-        P[it] = a + b * (it ** 2)
+    for t in integer_times[:2]:
+        P[t] = a + b * (t ** 2)
         
-    for it in itimes[1:-1]:
+    for t in integer_times[1:-1]:
 
-        # Eqn. 28 in SI
-        k_c = (a + b * it ** 2) * k_sd + b * (2 * it  + 1)
+        k_c = (a + b * t ** 2) * k_sd + b * (2 * t  + 1) # Eqn. 28 in SI
         
-        # Add noise to equilibrium price
-        noise = 2 * (np.random.rand() - .5) * noise_level
-        #P[it+1] *= (1 + noise)
-        k_c *= (1 + noise)
+        k_c *= (1 + noise[t])
 
-        # This term is always included (SI Eqn. 29)
-        P[it+1] = k_c + (1 - k_sd) * P[it]
+        # This term is always included (SI Eqn. 27 and 29)
+        P[t+1] = k_c + (1 - k_sd) * P[t]
 
-        # integer_speculation_start == 40
-        # när i >= 41 så är P(i+1) == P(42) påverkad av spekulation
-        # magic_time == 41
-        if it > integer_speculation_start:
+        if t >= integer_speculation_start:
+
             if magic_price is not None:
-                P[magic_time] = magic_price
+                # Only do this if magic_price is specified.
+                # This changes how the price is calculated at two time steps:
+                # 1. at time step integer_speculation_start and
+                # 2. at time step (integer_speculation_start + 1).
+                # P[integer_speculation_start] = magic price, but only AFTER
+                # the normal calculation of P[integer_speculation_start]
+                # has been used to evaluate the expression from SI Eqn. 27.
+                P[integer_speculation_start] = magic_price
             
-            P[it+1] += k_sp * (P[it] - P[it-1]) # auto-speculation
+            P[t+1] += k_sp * (P[t] - P[t-1]) # auto-speculation
             for asset_name in P_assets.columns:
                 P_asset = P_assets[asset_name] # alternative assets
-                P[it+1] += k[asset_name] * (P_asset[it] - P_asset[it-1])
+                P[t+1] += k[asset_name] * (P_asset[t] - P_asset[t-1])
 
-    P.index = ctimes
+    P.index = calendar_times
+    P_assets.index = calendar_times
 
     return P
-
-def filter_dates(dates, start=None, end=None):
-    if start is not None:
-        dates = dates[dates >= start]
-
-    if end is not None:
-        dates = dates[dates <= end]
-
-    return dates
-
-
-def load_assets(column='Adj Close', start=None, end=None):
-    sp500 = pd.read_csv(
-        'data/gspc-monthly.csv',
-        index_col='Date',
-        parse_dates=True)[column]
-    bonds = pd.read_csv(
-        'data/tnx-monthly.csv',
-        index_col='Date',
-        parse_dates=True)[column]
-    assets = pd.DataFrame({'sp500': sp500, 'bonds': 1/bonds})
-
-    return assets
 
 
 if __name__ == '__main__':
     start = pd.datetime(2004, 1, 1)
-    end = pd.datetime(2012, 3, 31)
-    P_assets = load_assets()
+    end = pd.datetime(2012, 1, 31)
+    P_assets = data.load_assets(start=start, end=end)
 
-    paper_params = dict(
+    # The parameters reported in the paper
+    reported_params = dict(
         a=113,
         k_sd=0.093,
         b=0.011,
         k_sp=1.27,
-        k={'sp500': -.085, 'bonds': -48.2},
-        speculation_start=pd.datetime(2007, 5, 1),
-        P_assets=P_assets,
-        start=start,
-        end=end
+        k={'equity': -.085, 'bonds': -48.2},
+        speculation_start=pd.datetime(2007, 6, 1),
+        P_assets=P_assets
         )
 
-    lagi_params = paper_params.copy()
-    lagi_params.update(
+    # The corrected parameters (reproducing the paper results)
+    corrected_params = reported_params.copy()
+    corrected_params.update(
         k_sd=0.09256,
         k_sp=1.2725,
-        k={'sp500': -0.085033, 'bonds': -48.2},
-        magic_price=140.45,
-        #noise_level=1e-3
+        k={'equity': -0.085033, 'bonds': -48.2},
+        magic_price=140.45
     )
-    P = run(**lagi_params)
 
-    print(P)
+    # Corrected parameters with 1% noise added to equilibrium price
+    noisy_params = corrected_params.copy()
+    noisy_params.update(noise_level=1e-2)
+
+    P = run_model(**corrected_params)
