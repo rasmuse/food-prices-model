@@ -36,6 +36,7 @@ def load_assets(column='Adj Close', start=None, end=None):
 
     dates = filter_dates(assets.index, start, end)
     assets = assets.loc[dates]
+    assets.index.name = 'Time'
 
     return assets
 
@@ -59,5 +60,6 @@ def load_price_index(**kwargs):
 
     dates = filter_dates(values.index, **kwargs)
     values = values[dates]
+    values.index.name = 'Time'
 
     return values
