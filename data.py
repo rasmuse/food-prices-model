@@ -38,3 +38,26 @@ def load_assets(column='Adj Close', start=None, end=None):
     assets = assets.loc[dates]
 
     return assets
+
+def load_price_index(**kwargs):
+    d = pd.DataFrame.from_csv('data/food-price-index.csv')
+    dates = d['period']
+    dates.replace(
+        '(?P<year>20\d{2})(?P<month>[A-Z]{3})',
+        '\g<month> \g<year>',
+        regex=True,
+        inplace=True)
+
+    dates = pd.to_datetime(dates)
+
+    values = d['data']
+    values.index = dates
+
+    values.sort_index(inplace=True)
+
+    values.dropna(inplace=True)
+
+    dates = filter_dates(values.index, **kwargs)
+    values = values[dates]
+
+    return values
